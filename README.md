@@ -1,20 +1,21 @@
-# PodBox Cider Bridge (FU38)
+# AstraPod Cider Bridge
 
-Metadata and explicit controls inside Cider 4, with an authenticated local renderer connection to HerdRemote. No audio capture and no Apple credential export.
+A Cider 4 plugin that gives [AstraPod Desktop](https://github.com/gfhdhytghd/AstraPod-Desktop)'s HerdRemote metadata and explicit playback and library controls over an authenticated loopback WebSocket, so the iPod can act as a Cider remote. It is HerdRemote's default Cider backend. No audio capture and no Apple credential export.
 
-## Compatibility and installation after review
+## Compatibility and installation
 
 The current target is Cider 4.0.9.1-1 with the active OTA frontend whose entry is `index-DIvsmjeS.js`. Built-in `/usr/lib/cider/resources/spa/` files can differ from the frontend actually served by Cider. `host-assets.json` pins the active renderer entry (SHA256 `74e5f389b2b4adcd7bd6572445023267d03bc647897306c86539e987cbe80e5e`). The installer checks the profile's `update.cup` first, or the built-in asset directory if no OTA exists. An explicit `--assets` selects an asset directory or OTA ZIP. Unknown or changed bytes cause refusal before profile changes.
 
 At runtime, the plugin resolves `/assets/<pinned entry>` against the renderer's `location.origin`, fetches it without credentials or redirects, and verifies its SHA256 before binding. It does not execute or import that entry. All plugin imports are relative plugin-local modules. Playback uses `__PLUGINSYS__.Stores.appleMusicStore`; library calls use `CiderApp.v3` with `throwOnHTTPError: true`, which the pinned active frontend supports. Metadata comes from `CiderApp.musicKitStore`. No private hashed module aliases or deprecated `MusicKit.getInstance()` call is used.
 
-After review, run from a host with Python 3.10+ and the HerdRemote dependencies:
+Install with Python 3.10 or later (standard library only):
 
 ```sh
-python cider-plugin/install.py
+git clone https://github.com/gfhdhytghd/AstraPod-Cider.git
+python AstraPod-Cider/install.py
 ```
 
-The default destination is `~/.config/sh.cider.genten/plugins/org.podbox.cider-bridge/`. The script moves any existing plugin directory to a timestamped `podbox-backups/` directory inside the Cider profile before replacing it. It does not edit Cider settings, enable plugins, reload Cider, change playback, or restart services. FU38 only runs this script against temporary profiles in tests.
+The default destination is `~/.config/sh.cider.genten/plugins/org.podbox.cider-bridge/`. The script moves any existing plugin directory to a timestamped `podbox-backups/` directory inside the Cider profile before replacing it. It does not edit Cider settings, enable plugins, reload Cider, change playback, or restart services.
 
 Enable **PodBox Cider Bridge** in Cider Settings > Extensions > Plugins. On first enable, paste the contents of `~/.config/podbox/cider-plugin.secret` into the PodBox connection prompt. This is a random PodBox bridge secret, never an Apple token. HerdRemote creates it once as an owned regular file with mode 0600. The plugin remembers it in Cider's origin localStorage (`podbox.bridge.secret.v1`) for automatic reconnect after Cider restarts. Cider owns that origin storage; it is not copied into a PodBox package. To re-pair, remove only this localStorage entry in Cider developer tools and reload the renderer manually.
 
@@ -24,9 +25,11 @@ Cider remembers enabled identifiers in origin localStorage `c3api/applied-plugin
 
 ## HerdRemote configuration
 
-- `CIDER_BACKEND=auto` (default): use the plugin after authenticated hello; use RPC while no plugin is connected.
-- `CIDER_BACKEND=plugin`: require the plugin; no RPC fallback.
-- `CIDER_BACKEND=rpc`: original RPC only; does not create a plugin listener or secret.
+Set these in AstraPod Desktop's Connection Settings or HerdRemote's environment.
+
+- `CIDER_BACKEND=plugin` (default): use this plugin; no RPC fallback.
+- `CIDER_BACKEND=auto`: use the plugin after authenticated hello; use Cider's RPC while no plugin is connected.
+- `CIDER_BACKEND=rpc`: Cider's RPC only; does not create a plugin listener or secret.
 - `CIDER_PLUGIN_PORT=10768`: bind only `127.0.0.1`. Pass the same `--port` to the installer.
 - `CIDER_PLUGIN_SECRET_FILE`: override the secret path; pass the same `--secret-file` to the installer.
 - `CIDER_PLUGIN_RENDERER_ORIGIN=http://127.0.0.1:10767`: the exact renderer Origin, independent of the RPC URL. Set it to the renderer page's origin if the renderer uses a different loopback host or port. Only exact HTTP(S) loopback origins are accepted; no wildcard, missing or `null` origin is accepted in production.
@@ -57,36 +60,18 @@ The adapter handles the compatibility routes consumed by `hrcider*.py`: playback
 ## Offline checks
 
 ```sh
-python -m pytest -q herdremote/tests/test_cider_plugin.py
-node --test cider-plugin/core.test.mjs cider-plugin/renderer.test.mjs
+node --test core.test.mjs renderer.test.mjs
+python -m pytest -q tests
 ```
 
-The Python suite uses a fake renderer peer on the real host listener, plus a Node peer using the actual JS adapter and a mocked host. The Node suite uses mocked playback/library APIs. Neither suite controls live Cider. `mock-host.mjs` and `integration-peer.mjs` are test fixtures and are not copied into the Cider profile by the installer. Offline checks do not establish live playback or Apple Music account acceptance.
+The Node suite uses mocked playback and library APIs; the Python suite runs the installer against temporary profiles. AstraPod Desktop's `herdremote/tests/test_cider_plugin.py` also drives the real JS adapter through `integration-peer.mjs` and `mock-host.mjs`; point it at this checkout with `ASTRAPOD_CIDER_PLUGIN`. None of these control live Cider. `mock-host.mjs` and `integration-peer.mjs` are test fixtures and are not copied into the Cider profile.
 
-## Update the installed copy after review (Claude)
+## Updating
 
-Run the updated `install.py` to regenerate `connection.mjs` with the non-secret asset hash map. Copying only plugin.js is insufficient. The installed directory must contain exactly the current runtime files:
+Run `install.py` again after every update; it regenerates `connection.mjs` with the asset hash map, so copying `plugin.js` alone is not enough. The installed directory holds exactly `plugin.yml`, `plugin.js`, `core.mjs`, `renderer.mjs` and the generated `connection.mjs` (no bridge secret). The paired secret survives in Cider's origin localStorage. Reload the Cider renderer after updating to unload the old code.
 
-- `plugin.yml`
-- `plugin.js`
-- `core.mjs`
-- `renderer.mjs`
-- `connection.mjs` (generated by the installer; no bridge secret)
+Each applied item change logs INFO `Cider plugin item applied id_hash=<12 hex> seq=<revision>` on the HerdRemote side; the hash identifies the song without logging titles or raw ids.
 
-Use `herdremote/hrcider_plugin.py` and the rest of HerdRemote from the same checkout. Existing origin localStorage retains the paired PodBox secret. Reload/enable and any host-service restart remain manual actions after review; this task performs neither.
+## License
 
-## Host worker recovery (Live fix 2)
-
-The canonical snapshot keys are id, repeat5, title, artist, album, composer, duration, position, rate, volume, repeat, shuffle, art, template and bg. Text defaults to an empty string, artwork key to `-`, and invalid/unknown background color to `181818`. Numeric output uses integers. The current RPC encodes repeat as none/one/all and shuffle as a boolean; the plugin uses numeric enums. Both encodings normalize to repeat 0/1/2 and shuffle 0/1 before snapshot construction. Plugin-only loading, membership and queue metadata remain outside this mapping. The Bridge adds host system volume/muted state for both backends in the same way.
-
-Unexpected exceptions in long-lived Cider workers produce one static diagnostic per worker per bridge/transport lifetime. Worker recovery uses an interruptible 250 ms backoff. The state worker preserves its prior snapshot through isolated failures and uses its existing unavailable/backoff policy after repeated failures. State comparisons check added and removed keys safely. Consumed controls are never requeued: an unexpected control error cancels pending loading and returns a failed acknowledgement, then the next command can run.
-
-This repair updates host files only: hrcider.py, hrcider_events.py, hrcider_plugin.py and the new hrcider_workers.py. Keep the complete set together. The existing plugin version 1.0.1 and pinned renderer assets remain unchanged. If the temporary `zz-cider-backend.conf` still forces `CIDER_BACKEND=rpc`, the repaired plugin backend will remain inactive until Claude changes that setting after review and manually restarts the host service. This task changes neither the mitigation nor the running service.
-
-## Live fix 3: current item freshness (plugin 1.0.2)
-
-Keep the RPC Socket.IO listener active alongside plugin events in auto/plugin mode. Either source can wake an item refresh; receiver callbacks never wait on their own WebSocket. Failed refreshes retain the pending hint. Apply identity, title and artwork together, and force CN publication on item changes even within the normal 250 ms publication throttle. Fast loading samples do not combine a new item id with an old title.
-
-Each applied plugin item change logs INFO `Cider plugin item applied id_hash=<12 hex> seq=<host receive revision>`. The revision increments for applied snapshots; the short hash identifies the canonical song id without logging titles or raw ids.
-
-This repair requires both the host runtime files (`hrcider.py`, `hrcider_plugin.py`) and plugin 1.0.2 (`plugin.js`, `plugin.yml`, `renderer.mjs`; keep core.mjs alongside them). After review Claude must replace the host files, run the existing installer to back up/replace the plugin, and manually reload/restart the relevant applications. The task itself does not install, enable, reload or restart anything. The pairing secret, connection.mjs and renderer hash pin do not change.
+GPL-2.0-or-later, see `LICENSE`.

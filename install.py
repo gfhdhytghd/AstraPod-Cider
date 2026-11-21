@@ -1,19 +1,45 @@
 #!/usr/bin/env python3
-"""Run only after review. Never enables, reloads or restarts Cider."""
+"""Install the bridge into a Cider profile. Never enables, reloads or restarts Cider."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
-import sys
+import stat
 import tempfile
 import zipfile
 
 SOURCE = Path(__file__).resolve().parent
-sys.path.insert(0, str(SOURCE.parent / 'herdremote'))
-from hrcider_plugin import default_secret_path, install_secret
+
+
+# HerdRemote's hrcider_plugin.py reads the same file; keep path and format in step.
+def default_secret_path():
+    return Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config'))) / 'podbox/cider-plugin.secret'
+
+
+def install_secret(path):
+    """Create once, refuse symlinks and insecure existing files. Never log it."""
+    path = Path(path).expanduser()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, 'w') as out:
+            out.write(secrets.token_hex(32) + '\n')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError('PodBox plugin secret must be an owned regular 0600 file')
+        value = source.read(66).strip()
+    if len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
+        raise ValueError('Invalid PodBox plugin secret')
+    return value
 
 IDENTIFIER = 'org.podbox.cider-bridge'
 # Only the inspected build has the import aliases used by plugin.js.
